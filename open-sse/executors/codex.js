@@ -67,6 +67,12 @@ setInterval(() => {
   for (const [key, entry] of assistantSessionMap) {
     if (now - entry.lastUsed > SESSION_TTL_MS) assistantSessionMap.delete(key);
   }
+  // Hard cap: if map grows beyond 500 entries, evict oldest 25% regardless of TTL
+  if (assistantSessionMap.size > 500) {
+    const entries = [...assistantSessionMap.entries()].sort((a, b) => a[1].lastUsed - b[1].lastUsed);
+    const evictCount = Math.floor(entries.length * 0.25);
+    for (let i = 0; i < evictCount; i++) assistantSessionMap.delete(entries[i][0]);
+  }
 }, 10 * 60 * 1000);
 
 /**

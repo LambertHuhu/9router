@@ -225,6 +225,7 @@ export function initState(sourceFormat) {
       started: false,
       msgTextBuf: {},
       msgItemAdded: {},
+      msgOutputIndexes: {},
       msgContentAdded: {},
       msgItemDone: {},
       reasoningId: "",
@@ -236,8 +237,10 @@ export function initState(sourceFormat) {
       funcArgsBuf: {},
       funcNames: {},
       funcCallIds: {},
+      funcOutputIndexes: {},
       funcArgsDone: {},
       funcItemDone: {},
+      nextOutputIndex: 0,
       completedSent: false
     };
   }

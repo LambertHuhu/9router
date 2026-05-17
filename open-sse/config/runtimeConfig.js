@@ -33,6 +33,7 @@ export const MEMORY_CONFIG = {
 
 // Stream stall timeout: abort if no chunk received within this duration
 export const STREAM_STALL_TIMEOUT_MS = 3 * 60 * 1000;
+export const STALL_TIMEOUT_MS = STREAM_STALL_TIMEOUT_MS;
 
 // Default token limits
 export const DEFAULT_MAX_TOKENS = 64000;
@@ -67,3 +68,16 @@ export function resolveRetryEntry(entry) {
 export const SKIP_PATTERNS = [
   "Please write a 5-10 word title for the following conversation:"
 ];
+
+// Adaptive: for large contexts, increase stall timeout proportionally.
+// DeepSeek V4, Gemini etc. can take much longer for first token with 200k+ token prompts.
+// Default: 3min base. For every 50k tokens of context over 100k, add 1 minute.
+export function getAdaptiveStallTimeout(contextSize = 0) {
+  if (contextSize <= 0) return STREAM_STALL_TIMEOUT_MS;
+  const extraPer50k = 60 * 1000; // 1 min per 50k tokens over threshold
+  const threshold = 100000;       // 100k tokens base
+  const extra = Math.max(0, Math.floor((contextSize - threshold) / 50000)) * extraPer50k;
+  const total = STALL_TIMEOUT_MS + extra;
+  // Cap at 15 minutes
+  return Math.min(total, 15 * 60 * 1000);
+}

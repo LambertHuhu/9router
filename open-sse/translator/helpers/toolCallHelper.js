@@ -120,7 +120,6 @@ export function fixMissingToolResponses(body) {
 
   for (let i = 0; i < body.messages.length; i++) {
     const msg = body.messages[i];
-    const nextMsg = body.messages[i + 1];
 
     newMessages.push(msg);
 
@@ -128,21 +127,28 @@ export function fixMissingToolResponses(body) {
     const toolCallIds = getToolCallIds(msg);
     if (toolCallIds.length === 0) continue;
 
-    // Check if next message has tool_result
-    if (nextMsg && !hasToolResults(nextMsg, toolCallIds)) {
-      // Insert tool responses for each tool_call
-      for (const id of toolCallIds) {
-        // OpenAI format: role = "tool"
-        newMessages.push({
-          role: "tool",
-          tool_call_id: id,
-          content: ""
-        });
+    // Collect all tool_call_ids that already have responses in subsequent consecutive role:"tool" messages
+    const respondedIds = new Set();
+    for (let j = i + 1; j < body.messages.length; j++) {
+      const subsequentMsg = body.messages[j];
+      if (subsequentMsg.role === "tool" && subsequentMsg.tool_call_id) {
+        respondedIds.add(subsequentMsg.tool_call_id);
+      } else if (subsequentMsg.role !== "tool") {
+        break;
       }
+    }
+
+    // Insert empty tool responses only for missing tool_call_ids
+    const missingIds = toolCallIds.filter(id => !respondedIds.has(id));
+    for (const id of missingIds) {
+      newMessages.push({
+        role: "tool",
+        tool_call_id: id,
+        content: ""
+      });
     }
   }
 
   body.messages = newMessages;
   return body;
 }
-

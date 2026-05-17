@@ -32,7 +32,29 @@ import { syncToJson as syncMitmAliasCache } from "@/lib/mitmAliasCache";
   try { initDbHooks(getSettings, updateSettings); } catch { /* ignore */ }
 })();
 
-process.setMaxListeners(20);
+process.setMaxListeners(100);
+
+// ─── Global error handlers ────────────────────────────────────────────────────
+// Node.js ≥15 crashes on unhandled rejection by default. With long-running
+// sessions and high-throughput streaming, edge-case rejections are inevitable.
+// Log and swallow to prevent process crash instead of silent death.
+if (!global.__errHandlers) {
+  global.__errHandlers = { registered: true };
+  process.on('unhandledRejection', (reason) => {
+    console.error(`[PROCESS] unhandledRejection: ${reason instanceof Error ? reason.message : reason}`);
+    if (reason instanceof Error && reason.stack) {
+      const lines = reason.stack.split('\n');
+      console.error(lines.slice(0, 6).join('\n'));
+    }
+  });
+  process.on('uncaughtException', (err) => {
+    console.error(`[PROCESS] uncaughtException: ${err.message}`);
+    if (err.stack) {
+      const lines = err.stack.split('\n');
+      console.error(lines.slice(0, 6).join('\n'));
+    }
+  });
+}
 
 // Survive Next.js hot reload
 const g = global.__appSingleton ??= {

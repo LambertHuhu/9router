@@ -22,10 +22,20 @@ const cleanupInterval = setInterval(() => {
             runtimeSessionStore.delete(key);
         }
     }
+    // Harder: evict sessions that have been idle >3× TTL regardless of cleanup
+    // to prevent unbounded growth on long-lived sessions with many connection IDs
+    if (runtimeSessionStore.size > 100) {
+      const entries = [...runtimeSessionStore.entries()];
+      const cutoff = now - MEMORY_CONFIG.sessionTtlMs * 3;
+      for (const [key, entry] of entries) {
+        if (entry.lastUsed < cutoff) runtimeSessionStore.delete(key);
+      }
+    }
 }, MEMORY_CONFIG.sessionCleanupIntervalMs);
 
 // Allow Node.js to exit even if interval is still active
 if (cleanupInterval.unref) cleanupInterval.unref();
+process.on('exit', () => clearInterval(cleanupInterval));
 
 /**
  * Get or create a session ID for the given connection.

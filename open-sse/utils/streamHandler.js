@@ -19,6 +19,7 @@ export function createStreamController({ onDisconnect, onError, log, provider, m
   const startTime = Date.now();
   let disconnected = false;
   let abortTimeout = null;
+  let connectedAt = Date.now();
 
   const logStream = (status) => {
     const duration = Date.now() - startTime;
@@ -42,7 +43,7 @@ export function createStreamController({ onDisconnect, onError, log, provider, m
       // Delay abort to allow cleanup
       abortTimeout = setTimeout(() => {
         abortController.abort();
-      }, 500);
+      }, 50);
 
       onDisconnect?.({ reason, duration: Date.now() - startTime });
     },
@@ -94,7 +95,7 @@ export function createDisconnectAwareStream(transformStream, streamController) {
   return new ReadableStream({
     async pull(controller) {
       if (!streamController.isConnected()) {
-        controller.close();
+        try { controller.close(); } catch { /* already cancelled */ }
         return;
       }
 
@@ -114,15 +115,22 @@ export function createDisconnectAwareStream(transformStream, streamController) {
 
         if (done) {
           streamController.handleComplete();
-          controller.close();
+          try { controller.close(); } catch { /* stream already cancelled */ }
           return;
         }
-        controller.enqueue(value);
+        try {
+          controller.enqueue(value);
+        } catch (enqueueErr) {
+          streamController.handleDisconnect('enqueue_failed');
+          reader.cancel().catch(() => {});
+          writer.abort().catch(() => {});
+          return;
+        }
       } catch (error) {
         streamController.handleError(error);
         reader.cancel().catch(() => {});
         writer.abort().catch(() => {});
-        controller.error(error);
+        try { controller.error(error); } catch { /* stream already errored/cancelled */ }
       }
     },
 

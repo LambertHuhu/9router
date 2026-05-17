@@ -6,6 +6,7 @@ const proxyDispatchers = new Map();
 
 // DNS cache — use Map to avoid prototype pollution via malformed hostnames
 const DNS_CACHE = new Map();
+const MAX_DNS_ENTRIES = 200;
 const MITM_BYPASS_HOSTS = [
   "cloudcode-pa.googleapis.com",
   "daily-cloudcode-pa.googleapis.com",
@@ -39,7 +40,14 @@ async function resolveRealIP(hostname) {
     const resolve4 = promisify(resolver.resolve4.bind(resolver));
     const addresses = await resolve4(hostname);
     DNS_CACHE.set(hostname, { ip: addresses[0], expiry: Date.now() + MEMORY_CONFIG.dnsCacheTtlMs });
-    return addresses[0];
+    // Evict stale entries periodically to prevent unbounded growth
+  if (DNS_CACHE.size > MAX_DNS_ENTRIES) {
+    const now = Date.now();
+    for (const [h, entry] of DNS_CACHE) {
+      if (now > entry.expiry) DNS_CACHE.delete(h);
+    }
+  }
+  return addresses[0];
   } catch (error) {
     console.warn(`[ProxyFetch] DNS resolve failed for ${hostname}:`, error.message);
     return null;

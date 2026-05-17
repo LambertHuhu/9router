@@ -165,12 +165,10 @@ export function createSSEStream(options = {}) {
         const parsed = parseSSELine(trimmed, targetFormat);
         if (!parsed) continue;
 
-        // For Ollama: done=true is the final chunk with finish_reason/usage, must translate
-        // For other formats: done=true is the [DONE] sentinel, skip
+        // For Ollama: done=true is the final chunk with finish_reason/usage, must translate.
+        // For other formats, [DONE] is only an upstream sentinel. Final client
+        // events and a single [DONE] are emitted from flush().
         if (parsed && parsed.done && targetFormat !== FORMATS.OLLAMA) {
-          const output = "data: [DONE]\n\n";
-          reqLogger?.appendConvertedChunk?.(output);
-          controller.enqueue(sharedEncoder.encode(output));
           continue;
         }
 
