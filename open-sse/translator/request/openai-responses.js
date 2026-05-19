@@ -15,6 +15,16 @@ const clampCallId = (id) => (typeof id === "string" && id.length > MAX_CALL_ID_L
 /**
  * Convert OpenAI Responses API request to OpenAI Chat Completions format
  */
+
+/**
+ * Strip all reasoning_content/reasoning type parts from content array.
+ * DeepSeek Chat Completions API rejects messages containing reasoning_content.
+ */
+function stripReasoningContent(content) {
+  if (!Array.isArray(content)) return content;
+  return content.filter(part => part.type !== "reasoning_content" && part.type !== "reasoning");
+}
+
 export function openaiResponsesToOpenAIRequest(model, body, stream, credentials) {
   if (!body.input) return body;
 
@@ -53,16 +63,19 @@ export function openaiResponsesToOpenAIRequest(model, body, stream, credentials)
       }
 
       // Convert content: input_text → text, output_text → text, input_image → image_url
+      // Strip reasoning_content from input (DeepSeek Chat Completions rejects it)
       const content = Array.isArray(item.content)
-        ? item.content.map(c => {
-          if (c.type === "input_text") return { type: "text", text: c.text };
-          if (c.type === "output_text") return { type: "text", text: c.text };
-          if (c.type === "input_image") {
-            const url = c.image_url || c.file_id || "";
-            return { type: "image_url", image_url: { url, detail: c.detail || "auto" } };
-          }
-          return c;
-        })
+        ? item.content
+            .filter(c => c.type !== "reasoning_content" && c.type !== "reasoning")
+            .map(c => {
+              if (c.type === "input_text") return { type: "text", text: c.text };
+              if (c.type === "output_text") return { type: "text", text: c.text };
+              if (c.type === "input_image") {
+                const url = c.image_url || c.file_id || "";
+                return { type: "image_url", image_url: { url, detail: c.detail || "auto" } };
+              }
+              return c;
+            })
         : item.content;
       result.messages.push({ role: item.role, content });
     }
@@ -226,7 +239,7 @@ export function openaiToOpenAIResponsesRequest(model, body, stream, credentials)
         result.input.push({
           type: "message",
           role: msg.role,
-          content
+          content: stripReasoningContent(content)
         });
       }
     }

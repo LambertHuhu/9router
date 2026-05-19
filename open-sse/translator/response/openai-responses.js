@@ -33,10 +33,14 @@ export function openaiToOpenAIResponsesResponse(chunk, state) {
     state.started = true;
     state.responseId = chunk.id ? `resp_${chunk.id}` : state.responseId;
     
+    // Capture model from first chunk (Chat Completions chunk has model field)
+    if (chunk.model) state.model = chunk.model;
+    
     emit("response.created", {
       type: "response.created",
       response: {
         id: state.responseId,
+        model: state.model,
         object: "response",
         created_at: state.created,
         status: "in_progress",
@@ -50,6 +54,7 @@ export function openaiToOpenAIResponsesResponse(chunk, state) {
       type: "response.in_progress",
       response: {
         id: state.responseId,
+        model: state.model,
         object: "response",
         created_at: state.created,
         status: "in_progress"
@@ -398,9 +403,11 @@ function sendCompleted(state, emit) {
     emit("response.completed", {
       type: "response.completed",
       response: {
+        model: state.model,
         id: state.responseId,
         object: "response",
         created_at: state.created,
+        completed_at: Math.floor(Date.now() / 1000),
         status: "completed",
         background: false,
         error: null,
