@@ -170,6 +170,17 @@ export function openaiResponsesToOpenAIRequest(model, body, stream, credentials)
   delete result.store;
   delete result.reasoning;
 
+  // Strip reasoning_content from all assistant messages (DeepSeek Chat API rejects it)
+  if (result.messages) {
+    result.messages = result.messages.map(m => {
+      if (m.role === "assistant" && m.reasoning_content !== undefined) {
+        const { reasoning_content, ...rest } = m;
+        return rest;
+      }
+      return m;
+    });
+  }
+
   return result;
 }
 

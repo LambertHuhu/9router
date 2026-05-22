@@ -108,6 +108,13 @@ export function openaiToOpenAIResponsesResponse(chunk, state) {
 
   // Handle finish_reason
   if (choice.finish_reason) {
+    // DeepSeek fallback: when finish_reason="stop" with empty content
+    // but we have reasoning text, treat the reasoning as the assistant's message.
+    // DeepSeek sometimes puts the entire response in reasoning_content and
+    // leaves content as "" (empty string), leaving no actionable output.
+    if (choice.finish_reason === "stop" && !delta.content && !delta.tool_calls && state.reasoningBuf) {
+      emitTextContent(state, emit, idx, state.reasoningBuf);
+    }
     for (const i in state.msgItemAdded) closeMessage(state, emit, i);
     closeReasoning(state, emit);
     for (const i in state.funcCallIds) closeToolCall(state, emit, i);
