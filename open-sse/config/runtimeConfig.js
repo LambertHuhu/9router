@@ -34,6 +34,7 @@ export const MEMORY_CONFIG = {
 // Stream stall timeout: abort if no chunk received within this duration
 export const STREAM_STALL_TIMEOUT_MS = 3 * 60 * 1000;
 export const STALL_TIMEOUT_MS = STREAM_STALL_TIMEOUT_MS;
+export const FETCH_CONNECT_TIMEOUT_MS = 20 * 1000;
 
 // Default token limits
 export const DEFAULT_MAX_TOKENS = 64000;

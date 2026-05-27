@@ -118,15 +118,14 @@ export async function POST(request) {
         return NextResponse.json({ valid: false, error: "API key unauthorized" });
       }
 
-      // Fallback: try chat/completions if modelId provided
+      // Fallback: try /messages with Anthropic-format body if modelId provided
       if (modelId) {
-        const chatRes = await fetchWithTimeout(`${normalizedBase}/chat/completions`, {
+        const msgRes = await fetchWithTimeout(`${normalizedBase}/messages`, {
           method: "POST",
           headers: {
-            "Authorization": `Bearer ${apiKey}`,
-            "Content-Type": "application/json",
             "x-api-key": apiKey,
-            "anthropic-version": "2023-06-01"
+            "anthropic-version": "2023-06-01",
+            "Content-Type": "application/json"
           },
           body: JSON.stringify({
             model: modelId,
@@ -134,13 +133,16 @@ export async function POST(request) {
             max_tokens: 1
           })
         });
-        if (chatRes.ok) {
-          return NextResponse.json({ valid: true, method: "chat" });
+        if (msgRes.ok) {
+          return NextResponse.json({ valid: true, method: "messages" });
+        }
+        if (msgRes.status === 401 || msgRes.status === 403) {
+          return NextResponse.json({ valid: false, error: "API key unauthorized" });
         }
         return NextResponse.json({
           valid: false,
-          error: getChatErrorMessage(chatRes.status),
-          method: "chat"
+          error: getChatErrorMessage(msgRes.status),
+          method: "messages"
         });
       }
 
