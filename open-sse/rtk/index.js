@@ -4,8 +4,20 @@ import { RAW_CAP, MIN_COMPRESS_SIZE } from "./constants.js";
 import { autoDetectFilter } from "./autodetect.js";
 import { safeApply } from "./applyFilter.js";
 
+const APPROX_CHARS_PER_TOKEN = 4;
+let rtkEnabled = false;
+
+export function setRtkEnabled(enabled) {
+  rtkEnabled = enabled === true;
+}
+
+export function isRtkEnabled() {
+  return rtkEnabled;
+}
+
 // Compress tool_result content in-place. Returns stats or null if disabled/failed.
 export function compressMessages(body, enabled) {
+  if (enabled === undefined) enabled = rtkEnabled;
   if (!enabled) return null;
   if (!body) return null;
 
@@ -143,6 +155,35 @@ function compressText(text, stats, shape) {
   stats.bytesAfter += out.length;
   stats.hits.push({ shape, filter: fn.filterName || fn.name, saved: bytesIn - out.length });
   return out;
+}
+
+function estimateTokensFromChars(chars) {
+  if (!chars || chars <= 0) return 0;
+  return Math.ceil(chars / APPROX_CHARS_PER_TOKEN);
+}
+
+export function summarizeRtkUsage(stats) {
+  if (!stats || !Array.isArray(stats.hits) || stats.hits.length === 0) return null;
+
+  const bytesBefore = Number(stats.bytesBefore) || 0;
+  const bytesAfter = Number(stats.bytesAfter) || 0;
+  const savedBytes = Math.max(0, bytesBefore - bytesAfter);
+  const estimatedTokensBefore = estimateTokensFromChars(bytesBefore);
+  const estimatedTokensAfter = estimateTokensFromChars(bytesAfter);
+  const savedTokens = Math.max(0, estimatedTokensBefore - estimatedTokensAfter);
+
+  if (savedBytes <= 0 && savedTokens <= 0) return null;
+
+  return {
+    bytesBefore,
+    bytesAfter,
+    savedBytes,
+    estimatedTokensBefore,
+    estimatedTokensAfter,
+    savedTokens,
+    hits: stats.hits.length,
+    filters: Array.from(new Set(stats.hits.map((hit) => hit.filter))),
+  };
 }
 
 // Convenience: format a log line from stats

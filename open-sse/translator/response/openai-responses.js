@@ -94,12 +94,18 @@ export function openaiToOpenAIResponsesResponse(chunk, state) {
     }
 
     if (content) {
-      emitTextContent(state, emit, idx, content);
+      if (shouldBufferToolSessionText(state, idx)) {
+        appendPendingToolSessionText(state, idx, content);
+      } else {
+        emitTextContent(state, emit, idx, content);
+      }
     }
   }
 
   // Handle tool_calls
   if (delta.tool_calls) {
+    flushPendingToolSessionTextBeforeToolCall(state, emit, idx);
+    state.sawToolCall = true;
     closeMessage(state, emit, idx);
     for (const tc of delta.tool_calls) {
       emitToolCall(state, emit, tc);
@@ -108,11 +114,12 @@ export function openaiToOpenAIResponsesResponse(chunk, state) {
 
   // Handle finish_reason
   if (choice.finish_reason) {
+    flushPendingToolSessionTextOnStop(state, emit, idx, choice.finish_reason);
     // DeepSeek fallback: when finish_reason="stop" with empty content
     // but we have reasoning text, treat the reasoning as the assistant's message.
     // DeepSeek sometimes puts the entire response in reasoning_content and
     // leaves content as "" (empty string), leaving no actionable output.
-    if (choice.finish_reason === "stop" && !delta.content && !delta.tool_calls && state.reasoningBuf) {
+    if (choice.finish_reason === "stop" && !delta.content && !delta.tool_calls && state.reasoningBuf && shouldPromoteReasoningOnlyStop(state, state.reasoningBuf) && !hasMessageContent(state, idx)) {
       emitTextContent(state, emit, idx, state.reasoningBuf);
     }
     for (const i in state.msgItemAdded) closeMessage(state, emit, i);
@@ -178,6 +185,84 @@ function emitReasoningDelta(state, emit, text) {
     summary_index: 0,
     delta: text
   });
+}
+
+function hasMessageContent(state, idx) {
+  return Boolean(state.msgTextBuf?.[idx]);
+}
+
+function shouldBufferToolSessionText(state, idx) {
+  return Boolean(state.requestHasTools && !state.sawToolCall && !hasMessageContent(state, idx));
+}
+
+function appendPendingToolSessionText(state, idx, content) {
+  if (!state.pendingToolSessionTextBuf) state.pendingToolSessionTextBuf = {};
+  state.pendingToolSessionTextBuf[idx] = (state.pendingToolSessionTextBuf[idx] || "") + content;
+}
+
+function takePendingToolSessionText(state, idx) {
+  const text = state.pendingToolSessionTextBuf?.[idx] || "";
+  if (state.pendingToolSessionTextBuf) delete state.pendingToolSessionTextBuf[idx];
+  return text;
+}
+
+function flushPendingToolSessionTextBeforeToolCall(state, emit, idx) {
+  const pending = takePendingToolSessionText(state, idx);
+  if (!pending) return;
+  if (shouldEmitToolSessionTextBeforeToolCall(pending)) {
+    emitTextContent(state, emit, idx, pending);
+  }
+}
+
+function flushPendingToolSessionTextOnStop(state, emit, idx, finishReason) {
+  if (finishReason !== "stop") {
+    takePendingToolSessionText(state, idx);
+    return;
+  }
+
+  const pending = takePendingToolSessionText(state, idx);
+  if (pending && shouldPromoteTextOnlyStop(state, pending) && !hasMessageContent(state, idx)) {
+    emitTextContent(state, emit, idx, pending);
+  }
+}
+
+function shouldPromoteReasoningOnlyStop(state, text) {
+  return shouldPromoteTextOnlyStop(state, text);
+}
+
+function shouldPromoteTextOnlyStop(state, text) {
+  const normalized = String(text || "").trim();
+  if (!normalized) return false;
+  if (isLowInformationText(normalized)) return false;
+
+  if (!state.requestHasTools) return true;
+
+  // In tool sessions, keep internal action plans as reasoning, but promote
+  // answer-like summaries that DeepSeek sometimes emits only as reasoning.
+  return !isToolActionPlanText(normalized);
+}
+
+function shouldEmitToolSessionTextBeforeToolCall(text) {
+  const normalized = String(text || "").trim();
+  return Boolean(normalized && !isLowInformationText(normalized) && !isToolActionPlanText(normalized));
+}
+
+function isLowInformationText(text) {
+  const compact = String(text || "").replace(/\s+/g, "");
+  return ["响应", "回答", "好的", "好", "收到", "ok", "OK"].includes(compact);
+}
+
+function isToolActionPlanText(text) {
+  const normalized = String(text || "").trim();
+  const completionSignals = /(完成|已完成|通过|结果|原因|问题|字段|数据|结论|建议|阻塞|需要用户|need user input|blocked)/i;
+  const actionPlanPatterns = [
+    /\b(let me|i should|i need to|i will|i'll|let's)\b/i,
+    /(先|现在|接下来|继续|需要).{0,24}(读|看|查|搜索|修改|改|实现|编译|运行|验证|同步|压测|部署|领取|做|执行|开始|清理|清除|上传|替换|写入|调整|重构)/,
+    /(先做|开干|下一步|剩余任务).{0,32}(领取|开始|继续|做|实现|改|查|读|跑|执行|清理|上传|替换)/,
+    /^(?:P\d+(?:\.\d+)?|[A-Z]\d+(?:\.\d+)?|响应)?\s*[:：].{0,120}(目标|准备|正在|先|接下来|继续|改|修改|实现|执行|开始|检查|读取|查看|清理|清除|上传|替换|写入|调整|重构)/
+  ];
+
+  return actionPlanPatterns.some(pattern => pattern.test(normalized)) && !completionSignals.test(normalized);
 }
 
 function closeReasoning(state, emit) {

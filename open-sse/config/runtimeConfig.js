@@ -31,8 +31,10 @@ export const MEMORY_CONFIG = {
   proxyDispatchersMaxSize: 20,
 };
 
-// Stream stall timeout: abort if no chunk received within this duration
-export const STREAM_STALL_TIMEOUT_MS = 30 * 1000;
+// Stream stall timeout: abort if no chunk received within this duration.
+// DeepSeek V4 can legitimately go quiet for >30s between chunks on large
+// reasoning/tool contexts, so the base timeout is intentionally conservative.
+export const STREAM_STALL_TIMEOUT_MS = 60 * 1000;
 
 // Fetch connect timeout: abort if upstream doesn't return response headers within this duration
 export const FETCH_CONNECT_TIMEOUT_MS = 20 * 1000;
@@ -72,14 +74,12 @@ export const SKIP_PATTERNS = [
 ];
 
 // Adaptive: for large contexts, increase stall timeout proportionally.
-// DeepSeek V4, Gemini etc. can take much longer for first token with 200k+ token prompts.
-// Default: 3min base. For every 50k tokens of context over 100k, add 1 minute.
+// Base: 60s. For every 30k tokens over 30k, add 30s. Cap at 10 minutes.
 export function getAdaptiveStallTimeout(contextSize = 0) {
   if (contextSize <= 0) return STREAM_STALL_TIMEOUT_MS;
-  const extraPer50k = 60 * 1000; // 1 min per 50k tokens over threshold
-  const threshold = 100000;       // 100k tokens base
-  const extra = Math.max(0, Math.floor((contextSize - threshold) / 50000)) * extraPer50k;
-  const total = STALL_TIMEOUT_MS + extra;
-  // Cap at 15 minutes
-  return Math.min(total, 15 * 60 * 1000);
+  const extraPer30k = 30 * 1000;
+  const threshold = 30000;
+  const extra = Math.max(0, Math.floor((contextSize - threshold) / 30000)) * extraPer30k;
+  const total = STREAM_STALL_TIMEOUT_MS + extra;
+  return Math.min(total, 10 * 60 * 1000);
 }

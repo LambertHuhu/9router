@@ -82,6 +82,26 @@ describe("injectReasoningContent — DeepSeek thinking round-trip", () => {
     expect(out.extra_body.thinking.type).toBe("disabled");
     expect(out.reasoning_effort).toBeUndefined();
   });
+
+  it("disables DeepSeek V4 Pro thinking on tool requests to avoid reasoning-only stops", () => {
+    const out = injectReasoningContent({
+      provider: "deepseek",
+      model: "deepseek-v4-pro",
+      body: { ...bodyWith([{ role: "user", content: "hi" }]), tools: [{ type: "function", function: { name: "Read" } }] },
+    });
+    expect(out.extra_body.thinking.type).toBe("disabled");
+  });
+
+  it("preserves explicit deepseek-v4-pro-max thinking even when tools are present", () => {
+    const out = injectReasoningContent({
+      provider: "deepseek",
+      model: "deepseek-v4-pro-max",
+      body: { ...bodyWith([{ role: "user", content: "hi" }]), tools: [{ type: "function", function: { name: "Read" } }] },
+    });
+    expect(out.model).toBe("deepseek-v4-pro");
+    expect(out.extra_body.thinking.type).toBe("enabled");
+    expect(out.reasoning_effort).toBe("max");
+  });
 });
 
 describe("OpenCodeExecutor — issue #1543 regression", () => {

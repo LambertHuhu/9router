@@ -27,6 +27,77 @@ const connCache = global._connectionMapCache;
 
 export const statsEmitter = global._statsEmitter;
 
+function createEmptyRtkStats() {
+  return {
+    savedTokens: 0,
+    estimatedInputTokensBefore: 0,
+    estimatedInputTokensAfter: 0,
+    savedBytes: 0,
+    compressedRequests: 0,
+    savingsRatio: 0,
+    compressionRatio: 0,
+    effectiveInputTokensBefore: 0,
+    effectiveInputTokensAfter: 0,
+  };
+}
+
+function normalizeRtkStats(rtk) {
+  return {
+    ...createEmptyRtkStats(),
+    savedTokens: Math.max(0, Number(rtk?.savedTokens) || 0),
+    estimatedInputTokensBefore: Math.max(0, Number(rtk?.estimatedInputTokensBefore) || 0),
+    estimatedInputTokensAfter: Math.max(0, Number(rtk?.estimatedInputTokensAfter) || 0),
+    savedBytes: Math.max(0, Number(rtk?.savedBytes) || 0),
+    compressedRequests: Math.max(0, Number(rtk?.compressedRequests) || 0),
+  };
+}
+
+function extractRtkMeta(meta) {
+  const rtk = meta?.rtk;
+  if (!rtk || typeof rtk !== "object") return null;
+
+  const normalized = normalizeRtkStats({
+    savedTokens: rtk.savedTokens,
+    estimatedInputTokensBefore: rtk.estimatedTokensBefore,
+    estimatedInputTokensAfter: rtk.estimatedTokensAfter,
+    savedBytes: rtk.savedBytes,
+    compressedRequests: 1,
+  });
+
+  if (
+    normalized.savedTokens <= 0 &&
+    normalized.estimatedInputTokensBefore <= 0 &&
+    normalized.estimatedInputTokensAfter <= 0 &&
+    normalized.savedBytes <= 0
+  ) {
+    return null;
+  }
+
+  return normalized;
+}
+
+function addRtkStats(target, source) {
+  if (!source) return;
+  target.savedTokens += source.savedTokens || 0;
+  target.estimatedInputTokensBefore += source.estimatedInputTokensBefore || 0;
+  target.estimatedInputTokensAfter += source.estimatedInputTokensAfter || 0;
+  target.savedBytes += source.savedBytes || 0;
+  target.compressedRequests += source.compressedRequests || 0;
+}
+
+function finalizeRtkStats(rtk, promptTokensAfter = 0) {
+  const normalized = normalizeRtkStats(rtk);
+  normalized.compressionRatio = normalized.estimatedInputTokensBefore > 0
+    ? (normalized.savedTokens / normalized.estimatedInputTokensBefore) * 100
+    : 0;
+  normalized.effectiveInputTokensAfter = Math.max(0, Number(promptTokensAfter) || 0);
+  normalized.effectiveInputTokensBefore = normalized.effectiveInputTokensAfter + normalized.savedTokens;
+  normalized.savingsRatio = normalized.effectiveInputTokensBefore > 0
+    ? (normalized.savedTokens / normalized.effectiveInputTokensBefore) * 100
+    : 0;
+  return normalized;
+}
+
 function getLocalDateKey(timestamp) {
   const d = timestamp ? new Date(timestamp) : new Date();
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
@@ -46,11 +117,15 @@ function aggregateEntryToDay(day, entry) {
   const completionTokens = entry.tokens?.completion_tokens || entry.tokens?.output_tokens || 0;
   const cost = entry.cost || 0;
   const vals = { promptTokens, completionTokens, cost };
+  const rtk = extractRtkMeta(entry.meta);
 
   day.requests = (day.requests || 0) + 1;
   day.promptTokens = (day.promptTokens || 0) + promptTokens;
   day.completionTokens = (day.completionTokens || 0) + completionTokens;
   day.cost = (day.cost || 0) + cost;
+  day.rtk = normalizeRtkStats(day.rtk);
+  addRtkStats(day.rtk, rtk);
+  day.rtk = finalizeRtkStats(day.rtk, day.promptTokens || 0);
 
   day.byProvider ||= {};
   day.byModel ||= {};
@@ -101,11 +176,12 @@ async function ensureRingInitialized() {
   recentRing.initialized = true;
   try {
     const db = await getAdapter();
-    const rows = db.all(`SELECT timestamp, provider, model, connectionId, apiKey, endpoint, cost, status, tokens FROM usageHistory ORDER BY id DESC LIMIT ?`, [RING_CAP]);
+    const rows = db.all(`SELECT timestamp, provider, model, connectionId, apiKey, endpoint, cost, status, tokens, meta FROM usageHistory ORDER BY id DESC LIMIT ?`, [RING_CAP]);
     recentRing.items = rows.reverse().map((r) => ({
       timestamp: r.timestamp, provider: r.provider, model: r.model, connectionId: r.connectionId,
       apiKey: r.apiKey, endpoint: r.endpoint, cost: r.cost, status: r.status,
       tokens: parseJson(r.tokens, {}),
+      meta: parseJson(r.meta, {}),
     }));
   } catch {}
 }
@@ -248,6 +324,7 @@ export async function saveRequestUsage(entry) {
     entry.cost = await calculateCost(entry.provider, entry.model, entry.tokens);
 
     const tokens = entry.tokens || {};
+    const meta = entry.meta && typeof entry.meta === "object" ? entry.meta : {};
     const promptTokens = tokens.prompt_tokens || tokens.input_tokens || 0;
     const completionTokens = tokens.completion_tokens || tokens.output_tokens || 0;
 
@@ -260,7 +337,7 @@ export async function saveRequestUsage(entry) {
           entry.timestamp, entry.provider || null, entry.model || null,
           entry.connectionId || null, entry.apiKey || null, entry.endpoint || null,
           promptTokens, completionTokens, entry.cost || 0, entry.status || "ok",
-          stringifyJson(tokens), stringifyJson({}),
+          stringifyJson(tokens), stringifyJson(meta),
         ]
       );
 
@@ -297,12 +374,13 @@ export async function getUsageHistory(filter = {}) {
   if (filter.endDate) { conds.push("timestamp <= ?"); params.push(new Date(filter.endDate).toISOString()); }
 
   const where = conds.length ? `WHERE ${conds.join(" AND ")}` : "";
-  const rows = db.all(`SELECT timestamp, provider, model, connectionId, apiKey, endpoint, cost, status, tokens FROM usageHistory ${where} ORDER BY id ASC`, params);
+  const rows = db.all(`SELECT timestamp, provider, model, connectionId, apiKey, endpoint, cost, status, tokens, meta FROM usageHistory ${where} ORDER BY id ASC`, params);
 
   return rows.map((r) => ({
     timestamp: r.timestamp, provider: r.provider, model: r.model,
     connectionId: r.connectionId, apiKey: r.apiKey, endpoint: r.endpoint,
     cost: r.cost, status: r.status, tokens: parseJson(r.tokens, {}),
+    meta: parseJson(r.meta, {}),
   }));
 }
 
@@ -367,6 +445,7 @@ export async function getUsageStats(period = "all") {
   const stats = {
     totalRequests: 0,
     totalPromptTokens: 0, totalCompletionTokens: 0, totalCost: 0,
+    rtk: createEmptyRtkStats(),
     byProvider: {}, byModel: {}, byAccount: {}, byApiKey: {}, byEndpoint: {},
     last10Minutes: [],
     pending: pendingRequests,
@@ -428,6 +507,7 @@ export async function getUsageStats(period = "all") {
       stats.totalPromptTokens += day.promptTokens || 0;
       stats.totalCompletionTokens += day.completionTokens || 0;
       stats.totalCost += day.cost || 0;
+      addRtkStats(stats.rtk, normalizeRtkStats(day.rtk));
 
       for (const [prov, p] of Object.entries(day.byProvider || {})) {
         if (!stats.byProvider[prov]) stats.byProvider[prov] = { requests: 0, promptTokens: 0, completionTokens: 0, cost: 0 };
@@ -539,16 +619,18 @@ export async function getUsageStats(period = "all") {
       cutoff = new Date(Date.now() - PERIOD_MS["24h"]).toISOString();
     }
     const filtered = db.all(
-      `SELECT timestamp, provider, model, connectionId, apiKey, endpoint, promptTokens, completionTokens, cost, tokens FROM usageHistory WHERE timestamp >= ?`,
+      `SELECT timestamp, provider, model, connectionId, apiKey, endpoint, promptTokens, completionTokens, cost, tokens, meta FROM usageHistory WHERE timestamp >= ?`,
       [cutoff]
     );
 
     for (const r of filtered) {
       const tokens = parseJson(r.tokens, {}) || {};
+      const meta = parseJson(r.meta, {}) || {};
       const promptTokens = tokens.prompt_tokens || 0;
       const completionTokens = tokens.completion_tokens || 0;
       const entryCost = r.cost || 0;
       const providerDisplayName = providerNodeNameMap[r.provider] || r.provider;
+      addRtkStats(stats.rtk, extractRtkMeta(meta));
 
       stats.totalPromptTokens += promptTokens;
       stats.totalCompletionTokens += completionTokens;
@@ -614,6 +696,7 @@ export async function getUsageStats(period = "all") {
   }
 
   stats.totalRequests = Object.values(stats.byProvider).reduce((sum, p) => sum + (p.requests || 0), 0);
+  stats.rtk = finalizeRtkStats(stats.rtk, stats.totalPromptTokens);
   return stats;
 }
 

@@ -68,10 +68,28 @@ function applyDeepSeekV4ProAlias({ provider, model, body }) {
   return nextBody;
 }
 
+function applyDeepSeekToolThinkingGuard({ provider, model, body }) {
+  if (provider !== "deepseek" || model !== DEEPSEEK_V4_PRO || !Array.isArray(body?.tools) || body.tools.length === 0) {
+    return body;
+  }
+
+  return {
+    ...body,
+    extra_body: {
+      ...(body.extra_body || {}),
+      thinking: {
+        ...(body.extra_body?.thinking || {}),
+        type: "disabled"
+      }
+    }
+  };
+}
+
 export function injectReasoningContent({ provider, model, body }) {
   const providerRule = PROVIDER_RULES[provider];
   const modelRule = MODEL_RULES.find(r => r.match(model));
   const rule = providerRule || modelRule;
-  const nextBody = applyDeepSeekV4ProAlias({ provider, model, body });
+  const aliasedBody = applyDeepSeekV4ProAlias({ provider, model, body });
+  const nextBody = applyDeepSeekToolThinkingGuard({ provider, model, body: aliasedBody });
   return applyRule(nextBody, rule);
 }

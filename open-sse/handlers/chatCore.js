@@ -18,7 +18,17 @@ import { handleStreamingResponse, buildOnStreamComplete } from "./chatCore/strea
 import { detectClientTool, isNativePassthrough } from "../utils/clientDetector.js";
 import { dedupeTools } from "../utils/toolDeduper.js";
 import { injectCaveman } from "../rtk/caveman.js";
-import { compressMessages, formatRtkLog } from "../rtk/index.js";
+import { compressMessages, formatRtkLog, summarizeRtkUsage } from "../rtk/index.js";
+
+function estimateContextSize(body) {
+  if (!body || typeof body !== "object") return 0;
+  try {
+    // Lightweight heuristic: 1 token ~= 4 chars for mixed JSON/message payloads.
+    return Math.ceil(JSON.stringify(body).length / 4);
+  } catch {
+    return 0;
+  }
+}
 
 /**
  * Core chat handler - shared between SSE and Worker
@@ -116,6 +126,8 @@ export async function handleChatCore({ body, modelInfo, credentials, log, onCred
 
   // RTK: compress tool_result content
   const rtkStats = compressMessages(translatedBody, rtkEnabled);
+  const rtkSummary = summarizeRtkUsage(rtkStats);
+  const requestMeta = rtkSummary ? { rtk: rtkSummary } : {};
   const rtkLine = formatRtkLog(rtkStats);
   if (rtkLine) console.log(rtkLine);
 
@@ -193,7 +205,8 @@ export async function handleChatCore({ body, modelInfo, credentials, log, onCred
       request: extractRequestConfig(body, stream),
       providerRequest: translatedBody || null,
       response: { error: error.message || String(error), status: error.name === "AbortError" ? 499 : 502, thinking: null },
-      status: "error"
+      status: "error",
+      meta: requestMeta,
     })).catch(() => { });
 
     if (error.name === "AbortError") {
@@ -239,7 +252,8 @@ export async function handleChatCore({ body, modelInfo, credentials, log, onCred
       request: extractRequestConfig(body, stream),
       providerRequest: finalBody || translatedBody || null,
       response: { error: message, status: statusCode, thinking: null },
-      status: "error"
+      status: "error",
+      meta: requestMeta,
     })).catch(() => { });
 
     const errMsg = formatProviderError(new Error(message), provider, model, statusCode);
@@ -248,7 +262,12 @@ export async function handleChatCore({ body, modelInfo, credentials, log, onCred
     return createErrorResult(statusCode, errMsg, resetsAtMs);
   }
 
-  const sharedCtx = { provider, model, body, stream, translatedBody, finalBody, requestStartTime, connectionId, apiKey, clientRawRequest, onRequestSuccess };
+  const contextSize = estimateContextSize(finalBody || translatedBody || body);
+  const sharedCtx = {
+    provider, model, body, stream, translatedBody, finalBody, requestStartTime,
+    connectionId, apiKey, clientRawRequest, onRequestSuccess, contextSize,
+    requestMeta,
+  };
   const appendLog = (extra) => appendRequestLog({ model, provider, connectionId, ...extra }).catch(() => { });
   const trackDone = () => trackPendingRequest(model, provider, connectionId, false);
 

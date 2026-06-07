@@ -11,6 +11,9 @@ import { normalizeResponsesInput } from "../helpers/responsesApiHelper.js";
 // Responses API enforces max 64 chars on call_id (#393)
 const MAX_CALL_ID_LEN = 64;
 const clampCallId = (id) => (typeof id === "string" && id.length > MAX_CALL_ID_LEN ? id.substring(0, MAX_CALL_ID_LEN) : id);
+const TOOL_USE_GUARD = "9router tool-use guard: When tools are available and the next step requires inspecting files, editing files, running commands, or verifying state, emit the appropriate tool call in this response. Do not finish with only reasoning or a statement like \"I'll verify\". If the user asked you to work through a task list and remaining tasks exist, do not stop after summarizing or listing the next task; continue by calling tools unless you are blocked and need explicit user approval. Only return a final text answer when no tool call is needed, all requested work is complete, or you are blocked and need user input.";
+const TOOL_USE_TAIL_GUARD = "9router continuation guard: You are in an active tool-use turn. If your response says you will continue, start, inspect, edit, compile, verify, run tests, or work on a next task, do not answer in text; emit the matching tool call now. Text-only answers are only for completed work or explicit blockers requiring user input.";
+const TOOL_RESULT_CONTINUATION_GUARD = "9router tool-result continuation: The previous message is a tool result. Continue from that result now. If more inspection, editing, commands, or verification are needed, emit the next tool call in this response. If the work is complete, give the final answer. Do not respond with only a placeholder such as \"响应\", \"回答\", or an execution plan.";
 
 /**
  * Convert OpenAI Responses API request to OpenAI Chat Completions format
@@ -23,6 +26,95 @@ const clampCallId = (id) => (typeof id === "string" && id.length > MAX_CALL_ID_L
 function stripReasoningContent(content) {
   if (!Array.isArray(content)) return content;
   return content.filter(part => part.type !== "reasoning_content" && part.type !== "reasoning");
+}
+
+function insertToolUseGuard(messages, model) {
+  if (!Array.isArray(messages)) return messages;
+  const next = [...messages];
+
+  if (!next.some(msg => typeof msg?.content === "string" && msg.content.includes("9router tool-use guard:"))) {
+    let insertAt = 0;
+    while (next[insertAt]?.role === "system") insertAt++;
+    next.splice(insertAt, 0, { role: "system", content: TOOL_USE_GUARD });
+  }
+
+  if (!next.some(msg => typeof msg?.content === "string" && msg.content.includes("9router continuation guard:"))) {
+    next.push({ role: "system", content: TOOL_USE_TAIL_GUARD });
+  }
+
+  if (shouldAppendToolResultContinuationGuard(next, model)) {
+    next.push({ role: "user", content: TOOL_RESULT_CONTINUATION_GUARD });
+  }
+  return next;
+}
+
+function shouldAppendToolResultContinuationGuard(messages, model) {
+  if (!isDeepSeekV4ProModel(model)) return false;
+  if (messages.some(msg => typeof msg?.content === "string" && msg.content.includes("9router tool-result continuation:"))) {
+    return false;
+  }
+
+  const lastNonSystem = [...messages].reverse().find(msg => msg?.role !== "system");
+  return lastNonSystem?.role === "tool";
+}
+
+function isDeepSeekV4ProModel(model) {
+  return String(model || "").trim() === "deepseek-v4-pro";
+}
+
+function sanitizeToolSessionMessages(messages) {
+  if (!Array.isArray(messages)) return messages;
+  return messages.filter((msg, index) => {
+    if (msg?.role !== "assistant" || msg.tool_calls) return true;
+
+    const text = extractMessageText(msg.content);
+    if (!text) return true;
+    if (isLowInformationToolText(text)) return false;
+
+    const next = messages[index + 1];
+    if (isToolActionPlanText(text) && (isAssistantToolCallMessage(next) || isContinueUserMessage(next))) {
+      return false;
+    }
+
+    return true;
+  });
+}
+
+function extractMessageText(content) {
+  if (typeof content === "string") return content;
+  if (!Array.isArray(content)) return "";
+  return content.map(part => {
+    if (typeof part === "string") return part;
+    return part?.text || "";
+  }).join("");
+}
+
+function isAssistantToolCallMessage(msg) {
+  return msg?.role === "assistant" && Array.isArray(msg.tool_calls) && msg.tool_calls.length > 0;
+}
+
+function isContinueUserMessage(msg) {
+  if (msg?.role !== "user") return false;
+  const compact = extractMessageText(msg.content).replace(/\s+/g, "");
+  return ["继续", "continue"].includes(compact.toLowerCase());
+}
+
+function isLowInformationToolText(text) {
+  const compact = String(text || "").replace(/\s+/g, "");
+  return ["响应", "回答", "好的", "好", "收到", "ok"].includes(compact.toLowerCase());
+}
+
+function isToolActionPlanText(text) {
+  const normalized = String(text || "").trim();
+  const completionSignals = /(完成|已完成|通过|结果|原因|问题|字段|数据|结论|建议|阻塞|需要用户|need user input|blocked)/i;
+  const actionPlanPatterns = [
+    /\b(let me|i should|i need to|i will|i'll|let's)\b/i,
+    /(先|现在|接下来|继续|需要).{0,24}(读|看|查|搜索|修改|改|实现|编译|运行|验证|同步|压测|部署|领取|做|执行|开始|清理|清除|上传|替换|写入|调整|重构)/,
+    /(先做|开干|下一步|剩余任务).{0,32}(领取|开始|继续|做|实现|改|查|读|跑|执行|清理|上传|替换)/,
+    /^(?:P\d+(?:\.\d+)?|[A-Z]\d+(?:\.\d+)?|响应)?\s*[:：].{0,120}(目标|准备|正在|先|接下来|继续|改|修改|实现|执行|开始|检查|读取|查看|清理|清除|上传|替换|写入|调整|重构)/
+  ];
+
+  return actionPlanPatterns.some(pattern => pattern.test(normalized)) && !completionSignals.test(normalized);
 }
 
 export function openaiResponsesToOpenAIRequest(model, body, stream, credentials) {
@@ -186,6 +278,11 @@ export function openaiResponsesToOpenAIRequest(model, body, stream, credentials)
         };
       })
       .filter(Boolean);
+  }
+
+  if (result.tools?.length > 0) {
+    result.messages = sanitizeToolSessionMessages(result.messages);
+    result.messages = insertToolUseGuard(result.messages, model);
   }
 
   // Cleanup Responses API specific fields

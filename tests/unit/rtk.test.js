@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from "vitest";
-import { compressMessages, setRtkEnabled, isRtkEnabled, formatRtkLog } from "../../open-sse/rtk/index.js";
+import { compressMessages, setRtkEnabled, isRtkEnabled, formatRtkLog, summarizeRtkUsage } from "../../open-sse/rtk/index.js";
 import { gitDiff } from "../../open-sse/rtk/filters/gitDiff.js";
 import { gitStatus } from "../../open-sse/rtk/filters/gitStatus.js";
 import { grep } from "../../open-sse/rtk/filters/grep.js";
@@ -354,5 +354,26 @@ describe("formatRtkLog", () => {
     expect(line).toContain("saved 600B");
     expect(line).toContain("60.0%");
     expect(line).toContain("git-diff");
+  });
+});
+
+describe("summarizeRtkUsage", () => {
+  it("returns token savings estimate for compressed stats", () => {
+    const summary = summarizeRtkUsage({
+      bytesBefore: 1000,
+      bytesAfter: 400,
+      hits: [{ filter: "git-diff" }, { filter: "git-diff" }, { filter: "grep" }],
+    });
+
+    expect(summary.savedBytes).toBe(600);
+    expect(summary.estimatedTokensBefore).toBe(250);
+    expect(summary.estimatedTokensAfter).toBe(100);
+    expect(summary.savedTokens).toBe(150);
+    expect(summary.hits).toBe(3);
+    expect(summary.filters).toEqual(["git-diff", "grep"]);
+  });
+
+  it("returns null without hits", () => {
+    expect(summarizeRtkUsage({ bytesBefore: 1000, bytesAfter: 400, hits: [] })).toBeNull();
   });
 });
