@@ -7,6 +7,12 @@
 import { register } from "../index.js";
 import { FORMATS } from "../formats.js";
 import { normalizeResponsesInput } from "../helpers/responsesApiHelper.js";
+import {
+  extractMessageText,
+  isContinueUserText,
+  isLowInformationToolText,
+  shouldDropStaleToolSessionAssistantText,
+} from "../helpers/toolSessionDecision.js";
 
 // Responses API enforces max 64 chars on call_id (#393)
 const MAX_CALL_ID_LEN = 64;
@@ -69,24 +75,21 @@ function sanitizeToolSessionMessages(messages) {
 
     const text = extractMessageText(msg.content);
     if (!text) return true;
-    if (isLowInformationToolText(text)) return false;
-
+    const previous = [...messages.slice(0, index)].reverse().find(item => item?.role !== "system");
     const next = messages[index + 1];
-    if (isToolActionPlanText(text) && (isAssistantToolCallMessage(next) || isContinueUserMessage(next))) {
-      return false;
-    }
-
-    return true;
+    const hasFollowingToolActivity = messages.slice(index + 1).some(item =>
+      isAssistantToolCallMessage(item) || item?.role === "tool"
+    );
+    return !shouldDropStaleToolSessionAssistantText(text, {
+      requestHasTools: true,
+      previousRole: previous?.role || null,
+      nextAssistantToolCall: isAssistantToolCallMessage(next),
+      nextToolMessage: next?.role === "tool",
+      nextIsContinueUser: isContinueUserMessage(next),
+      hasFollowingToolActivity,
+      hasContinuationGuard: typeof next?.content === "string" && next.content.includes("9router tool-result continuation:"),
+    });
   });
-}
-
-function extractMessageText(content) {
-  if (typeof content === "string") return content;
-  if (!Array.isArray(content)) return "";
-  return content.map(part => {
-    if (typeof part === "string") return part;
-    return part?.text || "";
-  }).join("");
 }
 
 function isAssistantToolCallMessage(msg) {
@@ -94,28 +97,7 @@ function isAssistantToolCallMessage(msg) {
 }
 
 function isContinueUserMessage(msg) {
-  if (msg?.role !== "user") return false;
-  const compact = extractMessageText(msg.content).replace(/\s+/g, "");
-  return ["继续", "continue"].includes(compact.toLowerCase());
-}
-
-function isLowInformationToolText(text) {
-  const compact = String(text || "").replace(/\s+/g, "");
-  return ["响应", "回答", "好的", "好", "收到", "ok"].includes(compact.toLowerCase());
-}
-
-function isToolActionPlanText(text) {
-  const normalized = String(text || "").trim();
-  const completionSignals = /(完成|已完成|通过|结果|原因|问题|字段|数据|结论|建议|阻塞|需要用户|need user input|blocked)/i;
-  const actionPlanPatterns = [
-    /\b(let me|i should|i need to|i will|i'll|let's)\b/i,
-    /^(?:explored|search(?:ed)?|investigat(?:e|ed|ing)|check(?:ed|ing)?|inspect(?:ed|ing)?|read(?:ing)?|found|ran)\b[\s\S]{0,240}$/i,
-    /(先|现在|接下来|继续|需要).{0,24}(读|看|查|搜索|修改|改|实现|编译|运行|验证|同步|压测|部署|领取|做|执行|开始|清理|清除|上传|替换|写入|调整|重构)/,
-    /(先做|开干|下一步|剩余任务).{0,32}(领取|开始|继续|做|实现|改|查|读|跑|执行|清理|上传|替换)/,
-    /^(?:P\d+(?:\.\d+)?|[A-Z]\d+(?:\.\d+)?|响应)?\s*[:：].{0,120}(目标|准备|正在|先|接下来|继续|改|修改|实现|执行|开始|检查|读取|查看|清理|清除|上传|替换|写入|调整|重构)/
-  ];
-
-  return actionPlanPatterns.some(pattern => pattern.test(normalized)) && !completionSignals.test(normalized);
+  return msg?.role === "user" && isContinueUserText(msg.content);
 }
 
 export function openaiResponsesToOpenAIRequest(model, body, stream, credentials) {

@@ -130,6 +130,25 @@ describe("openai-responses reasoning fallback", () => {
     expect(messageText(output)).toBe("");
   });
 
+  it("does not promote tool-result progress summaries like log tails into a final message", () => {
+    const progressText = "force killed\nDone. Log lines: 183 /tmp/fsa_vg_fix.log";
+    const events = feed([
+      {
+        id: "chatcmpl-test",
+        model: "deepseek-v4-pro",
+        choices: [{ index: 0, delta: { content: progressText } }],
+      },
+      {
+        id: "chatcmpl-test",
+        model: "deepseek-v4-pro",
+        choices: [{ index: 0, delta: { content: "" }, finish_reason: "stop" }],
+      },
+    ], { requestHasTools: true, requestEndsWithToolResult: true });
+
+    const output = completedOutput(events);
+    expect(messageText(output)).toBe("");
+  });
+
   it("does not promote low-information DeepSeek placeholders into a message", () => {
     const events = feed([
       {
@@ -292,5 +311,36 @@ describe("openai-responses tool request sanitation", () => {
       .map(msg => typeof msg.content === "string" ? msg.content : JSON.stringify(msg.content));
 
     expect(assistantTexts.some(text => text.includes("Explored"))).toBe(false);
+  });
+
+  it("removes stale tool-result progress summaries before the next tool turn", () => {
+    const body = {
+      input: [
+        {
+          type: "function_call_output",
+          call_id: "call_fix_log",
+          output: "force killed\nDone. Log lines: 183 /tmp/fsa_vg_fix.log",
+        },
+        {
+          type: "message",
+          role: "assistant",
+          content: [{ type: "output_text", text: "force killed\nDone. Log lines: 183 /tmp/fsa_vg_fix.log" }],
+        },
+        {
+          type: "function_call",
+          call_id: "call_read_log",
+          name: "exec_command",
+          arguments: "{\"cmd\":\"grep -n 'LEAK SUMMARY' /tmp/fsa_vg_fix.log\"}",
+        },
+      ],
+      tools: [{ type: "function", name: "exec_command", parameters: { type: "object", properties: {} } }],
+    };
+
+    const target = openaiResponsesToOpenAIRequest("deepseek-v4-pro", body, true, null);
+    const assistantTexts = target.messages
+      .filter(msg => msg.role === "assistant" && !msg.tool_calls)
+      .map(msg => typeof msg.content === "string" ? msg.content : JSON.stringify(msg.content));
+
+    expect(assistantTexts.some(text => text.includes("Log lines: 183"))).toBe(false);
   });
 });

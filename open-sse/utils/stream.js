@@ -5,6 +5,7 @@ import { extractUsage, hasValidUsage, estimateUsage, logUsage, addBufferToUsage,
 import { parseSSELine, hasValuableContent, fixInvalidId, formatSSE } from "./streamHelpers.js";
 import { getOpenAIResponsesEventName, isOpenAIResponsesTerminalEvent, formatIncompleteOpenAIResponsesStreamFailure } from "./responsesStreamHelpers.js";
 import { dbg, isDebugEnabled } from "./debugLog.js";
+import { isContinueUserText } from "../translator/helpers/toolSessionDecision.js";
 
 export { COLORS, formatSSE };
 
@@ -18,6 +19,34 @@ const STREAM_MODE = {
   TRANSLATE: "translate",    // Full translation between formats
   PASSTHROUGH: "passthrough" // No translation, normalize output, extract usage
 };
+
+function getRequestConversationItems(body) {
+  if (Array.isArray(body?.messages)) return body.messages;
+  if (Array.isArray(body?.input)) return body.input;
+  return [];
+}
+
+function getLastNonSystemRequestSignal(body) {
+  const items = getRequestConversationItems(body);
+  for (let i = items.length - 1; i >= 0; i--) {
+    const item = items[i];
+    if (!item || typeof item !== "object") continue;
+
+    if (item.role && item.role !== "system") {
+      return {
+        role: item.role,
+        isContinueUser: item.role === "user" && isContinueUserText(item.content),
+        hasContinuationGuard: item.role === "user" && typeof item.content === "string" && item.content.includes("9router tool-result continuation:"),
+      };
+    }
+
+    if (item.type === "function_call_output") {
+      return { role: "tool", isContinueUser: false, hasContinuationGuard: false };
+    }
+  }
+
+  return { role: null, isContinueUser: false, hasContinuationGuard: false };
+}
 
 /**
  * Create unified SSE transform stream
@@ -55,7 +84,17 @@ export function createSSEStream(options = {}) {
   const decoder = new TextDecoder("utf-8", { fatal: false });
 
   const requestHasTools = Array.isArray(body?.tools) && body.tools.length > 0;
-  const state = mode === STREAM_MODE.TRANSLATE ? { ...initState(sourceFormat), provider, toolNameMap, model, requestHasTools } : null;
+  const lastRequestSignal = getLastNonSystemRequestSignal(body);
+  const state = mode === STREAM_MODE.TRANSLATE ? {
+    ...initState(sourceFormat),
+    provider,
+    toolNameMap,
+    model,
+    requestHasTools,
+    requestEndsWithToolResult: lastRequestSignal.role === "tool",
+    lastUserWasContinue: lastRequestSignal.isContinueUser,
+    hasContinuationGuard: lastRequestSignal.hasContinuationGuard,
+  } : null;
 
   let totalContentLength = 0;
   let accumulatedContent = "";
