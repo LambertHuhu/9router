@@ -149,6 +149,25 @@ describe("openai-responses reasoning fallback", () => {
     expect(messageText(output)).toBe("");
   });
 
+  it("still promotes concise final findings after a tool result", () => {
+    const finalFinding = "DirectionalWsSession is declared in MediaSessionManager.h and PushConnectionWorker.h.";
+    const events = feed([
+      {
+        id: "chatcmpl-test",
+        model: "deepseek-v4-pro",
+        choices: [{ index: 0, delta: { content: finalFinding } }],
+      },
+      {
+        id: "chatcmpl-test",
+        model: "deepseek-v4-pro",
+        choices: [{ index: 0, delta: { content: "" }, finish_reason: "stop" }],
+      },
+    ], { requestHasTools: true, requestEndsWithToolResult: true, hasContinuationGuard: true });
+
+    const output = completedOutput(events);
+    expect(messageText(output)).toBe(finalFinding);
+  });
+
   it("does not promote low-information DeepSeek placeholders into a message", () => {
     const events = feed([
       {
@@ -342,5 +361,31 @@ describe("openai-responses tool request sanitation", () => {
       .map(msg => typeof msg.content === "string" ? msg.content : JSON.stringify(msg.content));
 
     expect(assistantTexts.some(text => text.includes("Log lines: 183"))).toBe(false);
+  });
+
+  it("keeps answer-like assistant findings in history even after a tool result", () => {
+    const answerText = "DirectionalWsSession is declared in MediaSessionManager.h and PushConnectionWorker.h.";
+    const body = {
+      input: [
+        {
+          type: "function_call_output",
+          call_id: "call_find_header",
+          output: "./MediaOrchestration/MediaSessionManager.h\n./Adapter/PushConnectionWorker.h",
+        },
+        {
+          type: "message",
+          role: "assistant",
+          content: [{ type: "output_text", text: answerText }],
+        },
+      ],
+      tools: [{ type: "function", name: "exec_command", parameters: { type: "object", properties: {} } }],
+    };
+
+    const target = openaiResponsesToOpenAIRequest("deepseek-v4-pro", body, true, null);
+    const assistantTexts = target.messages
+      .filter(msg => msg.role === "assistant" && !msg.tool_calls)
+      .map(msg => typeof msg.content === "string" ? msg.content : JSON.stringify(msg.content));
+
+    expect(assistantTexts.some(text => text.includes("DirectionalWsSession is declared"))).toBe(true);
   });
 });

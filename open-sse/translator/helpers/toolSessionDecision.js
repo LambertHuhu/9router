@@ -69,15 +69,24 @@ export function shouldContinueToolSessionText(text, context = {}) {
   if (!normalized) return false;
   if (hasCompletionSignal(normalized) || hasBlockerSignal(normalized)) return false;
 
+  const actionPlan = isToolActionPlanText(normalized);
+  const progressSummary = isToolProgressSummaryText(normalized);
+
+  // Structural context alone is not enough to force continuation.
+  // We only continue when the text itself still looks like an in-progress
+  // tool-session update (plan/progress), then use surrounding structure as
+  // supporting evidence.
+  if (!actionPlan && !progressSummary) return false;
+
   let continueScore = 0;
   if (context.requestHasTools) continueScore += 1;
-  if (context.requestEndsWithToolResult || context.previousRole === "tool") continueScore += 3;
+  if (context.requestEndsWithToolResult || context.previousRole === "tool") continueScore += 2;
   if (context.lastUserWasContinue || context.nextIsContinueUser) continueScore += 1;
-  if (context.nextAssistantToolCall) continueScore += 3;
-  if (context.nextToolMessage || context.hasFollowingToolActivity) continueScore += 2;
-  if (context.hasContinuationGuard) continueScore += 2;
-  if (isToolActionPlanText(normalized)) continueScore += 3;
-  if (isToolProgressSummaryText(normalized)) continueScore += 2;
+  if (context.nextAssistantToolCall) continueScore += 2;
+  if (context.nextToolMessage || context.hasFollowingToolActivity) continueScore += 1;
+  if (context.hasContinuationGuard) continueScore += 1;
+  if (actionPlan) continueScore += 2;
+  if (progressSummary) continueScore += 1;
 
   return continueScore >= 3;
 }
