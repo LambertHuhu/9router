@@ -111,6 +111,25 @@ describe("openai-responses reasoning fallback", () => {
     expect(reasoningText(output)).toBe(actionPlan);
   });
 
+  it("does not promote Codex-style explored/search status text into a final message", () => {
+    const progressText = "Explored\n└ Search class.*DirectionalWsSession|struct.*DirectionalWsSession";
+    const events = feed([
+      {
+        id: "chatcmpl-test",
+        model: "deepseek-v4-pro",
+        choices: [{ index: 0, delta: { content: progressText } }],
+      },
+      {
+        id: "chatcmpl-test",
+        model: "deepseek-v4-pro",
+        choices: [{ index: 0, delta: { content: "" }, finish_reason: "stop" }],
+      },
+    ], { requestHasTools: true });
+
+    const output = completedOutput(events);
+    expect(messageText(output)).toBe("");
+  });
+
   it("does not promote low-information DeepSeek placeholders into a message", () => {
     const events = feed([
       {
@@ -247,5 +266,31 @@ describe("openai-responses tool request sanitation", () => {
     expect(assistantTexts.some(text => text.includes("P15: B1"))).toBe(false);
     expect(target.messages.at(-1).role).toBe("user");
     expect(target.messages.at(-1).content).toContain("9router tool-result continuation:");
+  });
+
+  it("removes stale Codex-style explored/search progress messages before the next tool turn", () => {
+    const body = {
+      input: [
+        {
+          type: "message",
+          role: "assistant",
+          content: [{ type: "output_text", text: "Explored\n└ Search class.*DirectionalWsSession|struct.*DirectionalWsSession" }],
+        },
+        {
+          type: "function_call",
+          call_id: "call_find_header",
+          name: "exec_command",
+          arguments: "{\"cmd\":\"find . -name '*.h'\"}",
+        },
+      ],
+      tools: [{ type: "function", name: "exec_command", parameters: { type: "object", properties: {} } }],
+    };
+
+    const target = openaiResponsesToOpenAIRequest("deepseek-v4-pro", body, true, null);
+    const assistantTexts = target.messages
+      .filter(msg => msg.role === "assistant" && !msg.tool_calls)
+      .map(msg => typeof msg.content === "string" ? msg.content : JSON.stringify(msg.content));
+
+    expect(assistantTexts.some(text => text.includes("Explored"))).toBe(false);
   });
 });

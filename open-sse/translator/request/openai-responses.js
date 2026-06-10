@@ -109,6 +109,7 @@ function isToolActionPlanText(text) {
   const completionSignals = /(完成|已完成|通过|结果|原因|问题|字段|数据|结论|建议|阻塞|需要用户|need user input|blocked)/i;
   const actionPlanPatterns = [
     /\b(let me|i should|i need to|i will|i'll|let's)\b/i,
+    /^(?:explored|search(?:ed)?|investigat(?:e|ed|ing)|check(?:ed|ing)?|inspect(?:ed|ing)?|read(?:ing)?|found|ran)\b[\s\S]{0,240}$/i,
     /(先|现在|接下来|继续|需要).{0,24}(读|看|查|搜索|修改|改|实现|编译|运行|验证|同步|压测|部署|领取|做|执行|开始|清理|清除|上传|替换|写入|调整|重构)/,
     /(先做|开干|下一步|剩余任务).{0,32}(领取|开始|继续|做|实现|改|查|读|跑|执行|清理|上传|替换)/,
     /^(?:P\d+(?:\.\d+)?|[A-Z]\d+(?:\.\d+)?|响应)?\s*[:：].{0,120}(目标|准备|正在|先|接下来|继续|改|修改|实现|执行|开始|检查|读取|查看|清理|清除|上传|替换|写入|调整|重构)/
