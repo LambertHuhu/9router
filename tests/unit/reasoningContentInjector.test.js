@@ -45,11 +45,20 @@ describe("injectReasoningContent — DeepSeek thinking round-trip", () => {
     expect(out.messages[0].reasoning_content).toBe(original);
   });
 
-  it("applies provider-level rule for provider 'deepseek' (scope all)", () => {
+  it("applies provider-level rule for provider 'deepseek' (scope toolCalls only)", () => {
     const out = injectReasoningContent({
       provider: "deepseek",
       model: "deepseek-chat",
       body: bodyWith([{ role: "assistant", content: "answer" }]),
+    });
+    expect(out.messages[0].reasoning_content).toBeUndefined();
+  });
+
+  it("still injects for provider 'deepseek' when assistant message has tool_calls", () => {
+    const out = injectReasoningContent({
+      provider: "deepseek",
+      model: "deepseek-chat",
+      body: bodyWith([assistantWithToolCall]),
     });
     expect(out.messages[0].reasoning_content).toBeDefined();
   });

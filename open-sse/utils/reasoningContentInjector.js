@@ -6,7 +6,7 @@ const PLACEHOLDER = " ";
 
 // Provider-level rules: keyed by executor.provider
 const PROVIDER_RULES = {
-  deepseek: { scope: "all" },
+  deepseek: { scope: "toolCalls" },
   minimax: { scope: "all" },
   "minimax-cn": { scope: "all" }
 };
