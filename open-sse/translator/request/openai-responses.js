@@ -55,7 +55,7 @@ function insertToolUseGuard(messages, model) {
 }
 
 function shouldAppendToolResultContinuationGuard(messages, model) {
-  if (!isDeepSeekV4ProModel(model)) return false;
+  if (!isDeepSeekModel(model)) return false;
   if (messages.some(msg => typeof msg?.content === "string" && msg.content.includes("9router tool-result continuation:"))) {
     return false;
   }
@@ -64,8 +64,8 @@ function shouldAppendToolResultContinuationGuard(messages, model) {
   return lastNonSystem?.role === "tool";
 }
 
-function isDeepSeekV4ProModel(model) {
-  return String(model || "").trim() === "deepseek-v4-pro";
+function isDeepSeekModel(model) {
+  return /deepseek/i.test(String(model || "").trim());
 }
 
 function sanitizeToolSessionMessages(messages) {
